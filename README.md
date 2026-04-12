@@ -1,4 +1,5 @@
 TFAA 2.0 - Universal Edition
+
 A modified version of Temporal Filter Anti-Aliasing (TFAA) for ReShade, optimized for broader compatibility and improved resource handling.
 
 Changes in 2.0
