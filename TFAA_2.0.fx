@@ -9,8 +9,13 @@
     - Implemented Universal Motion Bridge (Launchpad, VORT, Lumenite)
     - Resolved history buffer resource pooling conflicts
     - Refactored codebase for improved performance and reduced binary size
+    - Optimized neighborhood sampling math to eliminate sub-pixel blurring
     
     License: CC BY-NC 4.0 (https://creativecommons.org/licenses/by-nc/4.0/)
+=============================================================================*/
+
+/*=============================================================================
+    Resources & Global Includes
 =============================================================================*/
 
 #include "ReShadeUI.fxh"
@@ -21,7 +26,7 @@
 #endif
 
 /*=============================================================================
-    Preprocessor Settings
+    Compatibility & Format Settings
 =============================================================================*/
 
 // Compatibility mode for OpenGL. Set this to 1 in Preprocessor Definitions if playing OpenGL-based games or if the shader fails to display.
@@ -35,11 +40,22 @@
     #define TFAA_FORMAT RGBA16F
 #endif
 
+/*=============================================================================
+    Global Constants & Uniforms
+=============================================================================*/
+
 // Uniform variable to access the frame time.
 uniform float frametime < source = "frametime"; >;
 
 // Constant for temporal weights adjustment based on a 48 FPS baseline.
 static const float fpsConst = (1000.0 / 48.0);
+
+// Discrete sampling grid for 3x3 neighborhood kernels.
+static const float2 nOffsets[9] = { 
+    float2(-1, -1), float2(0, -1), float2(1, -1), 
+    float2(-1,  0), float2(0,  0), float2(1,  0), 
+    float2(-1,  1), float2(0,  1), float2(1,  1) 
+};
 
 /*=============================================================================
     UI Uniforms
@@ -243,7 +259,11 @@ float getDepth(float2 texcoord)
 
 // --- Lumenite Kernel Hook ---
 texture2D tLumaFlow { Width = BUFFER_WIDTH/8; Height = BUFFER_HEIGHT/8; Format = RG16F; };
-sampler2D sLumaFlow { Texture = tLumaFlow; MagFilter = POINT; MinFilter = POINT; AddressU = CLAMP; AddressV = CLAMP; };
+sampler2D sLumaFlow { 
+    Texture = tLumaFlow; 
+    MagFilter = POINT; MinFilter = POINT; 
+    AddressU = CLAMP; AddressV = CLAMP; 
+};
 
 // --- VORT Motion Hook ---
 texture2D MotVectTexVort { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
@@ -253,7 +273,7 @@ sampler2D sMotVectTexVort {
     AddressU = CLAMP; AddressV = CLAMP; 
 };
 
-// --- iMMERSE Launchpad Hook (The Namespace Secret) ---
+// --- iMMERSE Launchpad Hook (Deferred Integration) ---
 namespace Deferred 
 {
     texture MotionVectorsTex { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
@@ -297,12 +317,6 @@ float4 TemporalFilter(float4 position : SV_Position, float2 texcoord : TEXCOORD)
     float4 sampleCur = tex2Dlod(smpInCurBackup, texcoord, 0);
     float4 cvtColorCur = float4(cvtRgb2whatever(sampleCur.rgb), sampleCur.a);
 
-    static const float2 nOffsets[9] = { 
-        float2(-1, -1), float2(0, -1), float2(1, -1), 
-        float2(-1,  0), float2(0,  0), float2(1,  0), 
-        float2(-1,  1), float2(0,  1), float2(1,  1) 
-    };
-
     int closestDepthIndex = 4;
     float4 minimumCvt = 2;
     float4 maximumCvt = -1;
@@ -324,7 +338,6 @@ float4 TemporalFilter(float4 position : SV_Position, float2 texcoord : TEXCOORD)
     float lastDepth = tex2Dlod(smpDepthBackup, lastSamplePos, 0).r;
     float4 sampleExp = saturate(sampleHistory(smpExpColorBackup, lastSamplePos));
 
-    float fpsFix       = frametime / fpsConst;
     float localContrast= saturate(pow(abs(maximumCvt.r - minimumCvt.r), 0.75));
     float speed        = length(motion);
     float speedFactor  = 1.0 - pow(saturate(speed * 20.0), 0.5);
@@ -360,16 +373,25 @@ void SavePost(float4 position : SV_Position, float2 texcoord : TEXCOORD, out flo
 // Final output pass with adaptive sharpening (CAS-style)
 float4 Out(float4 position : SV_Position, float2 texcoord : TEXCOORD ) : SV_Target
 {
-    float4 center     = tex2Dlod(smpExpColor, texcoord, 0);
-    float4 top        = tex2Dlod(smpExpColor, texcoord + (float2(0, -1) * ReShade::PixelSize), 0);
-    float4 bottom     = tex2Dlod(smpExpColor, texcoord + (float2(0,  1) * ReShade::PixelSize), 0);
-    float4 left       = tex2Dlod(smpExpColor, texcoord + (float2(-1, 0) * ReShade::PixelSize), 0);
-    float4 right      = tex2Dlod(smpExpColor, texcoord + (float2(1,  0) * ReShade::PixelSize), 0);
-    float4 topLeft    = tex2Dlod(smpExpColor, texcoord + (float2(-0.7, -0.7) * ReShade::PixelSize), 0);
-    float4 topRight   = tex2Dlod(smpExpColor, texcoord + (float2(0.7,  -0.7) * ReShade::PixelSize), 0);
-    float4 bottomLeft = tex2Dlod(smpExpColor, texcoord + (float2(-0.7,  0.7) * ReShade::PixelSize), 0);
-    float4 bottomRight= tex2Dlod(smpExpColor, texcoord + (float2(0.7,   0.7) * ReShade::PixelSize), 0);
+    // Optimized 3x3 Neighborhood Sampling using nOffsets
+    float4 neighbors[9];
+    for(int i = 0; i < 9; i++)
+    {
+        neighbors[i] = tex2Dlod(smpExpColor, texcoord + (nOffsets[i] * ReShade::PixelSize), 0);
+    }
 
+    // Direct Mapping for Logic Clarity
+    float4 topLeft     = neighbors[0];
+    float4 top         = neighbors[1];
+    float4 topRight    = neighbors[2];
+    float4 left        = neighbors[3];
+    float4 center      = neighbors[4];
+    float4 right       = neighbors[5];
+    float4 bottomLeft  = neighbors[6];
+    float4 bottom      = neighbors[7];
+    float4 bottomRight = neighbors[8];
+
+    // Compute Min/Max for contrast detection
     float4 maxBox = max(max(top, max(bottom, max(left, max(right, center)))), max(topLeft, max(topRight, max(bottomLeft, bottomRight))));
     float4 minBox = min(min(top, min(bottom, min(left, min(right, center)))), min(topLeft, min(topRight, min(bottomLeft, bottomRight))));
 
