@@ -3,9 +3,10 @@
 A modified version of Temporal Filter Anti-Aliasing (TFAA) for ReShade, optimized for broader compatibility and improved resource handling.
 
 ## Changes in 2.0
-- **Universal Motion Bridge:** Adjusted motion vector logic for improved stability across various game engines and motion providers.
-- **Precision Sampling:** Implemented a discrete 3x3 neighborhood grid to eliminate legacy sub-pixel blurring.
-- **Optimization:** Refactored code to improve frame-time performance and reduced binary size.
+- **Motion Clarity Fix:** Implemented a new motion-kickstart curve with 160.0x scaling and 3.15x gain to eliminate TAA smear.
+- **Universal Motion Bridge:** Added a UI dropdown for iMMERSE: Launchpad, vort_MotionEffects, and LUMENITE: Kernel motion vector providers.
+- **Optimization:** Refactored codebase for improved performance and reduced binary size.
+- **Precision Sampling:** Optimized neighborhood sampling math to eliminate sub-pixel blurring.
 - **Bug Fixes:** Resolved history buffer resource pooling conflicts and depth-buffer inversion issues.
 
 ## Installation and Requirements
