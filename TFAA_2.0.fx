@@ -338,13 +338,17 @@ float4 TemporalFilter(float4 position : SV_Position, float2 texcoord : TEXCOORD)
     float lastDepth = tex2Dlod(smpDepthBackup, lastSamplePos, 0).r;
     float4 sampleExp = saturate(sampleHistory(smpExpColorBackup, lastSamplePos));
 
-    float localContrast= saturate(pow(abs(maximumCvt.r - minimumCvt.r), 0.75));
-    float speed        = length(motion);
-    float speedFactor  = 1.0 - pow(saturate(speed * 20.0), 0.5);
+    float localContrast = saturate(pow(abs(maximumCvt.r - minimumCvt.r), 0.75));
+    
+    // Normalize motion magnitude for high-precision sensitivity
+    float motionMagnitude = length(motion) * 160.0; 
+    float speedFactor = 1.0 - pow(saturate(motionMagnitude * 0.125), 0.5);
 
-    float depthDelta = max(0, saturate(minimumCvt.a - lastDepth)) / sampleCur.a;
-    float depthMask  = saturate(1.0 - pow(depthDelta * 4, 4));
+    // Calculate depth-based rejection with zero-division safety
+    float depthDelta = max(0, saturate(minimumCvt.a - lastDepth)) / max(sampleCur.a, 0.0001);
+    float depthMask = saturate(1.0 - pow(depthDelta * 4, 4));
 
+    // Temporal weight calculation with fps compensation
     float baseLeak = 1.0 - lerp(0.50, 0.98, UI_TEMPORAL_FILTER_STRENGTH);
     float adjustedLeak = pow(abs(baseLeak), frametime / fpsConst);
 
@@ -357,8 +361,18 @@ float4 TemporalFilter(float4 position : SV_Position, float2 texcoord : TEXCOORD)
     const static float correctionFactor = 2;
     float3 blendedColor = saturate(pow(lerp(pow(sampleCur.rgb, correctionFactor), pow(sampleExpClamped.rgb, correctionFactor), weight), (1.0 / correctionFactor)));
 
-    float sharp = (0.01 + localContrast) * (pow(speed, 0.3)) * 32;
-    sharp = saturate(((sharp + sampleExpClamped.a) * 0.5) * depthMask * UI_POST_SHARPEN * UI_TEMPORAL_FILTER_STRENGTH);
+    // Restore aggressive reconstruction curve for zero-blur motion
+    float motionKick = motionMagnitude > 0.0 ? 0.2 : 0.0;
+    float reconstructionCurve = saturate(motionKick + pow(saturate(motionMagnitude), 0.35));
+    
+    // Detect luma variance for blur compensation
+    float lumaError = saturate(abs(sampleCur.r - sampleExpClamped.r) * 25.0);
+
+    // Calculate adaptive sharpening weight
+    float sharp = reconstructionCurve * lumaError * weight * (1.25 + localContrast) * UI_POST_SHARPEN;
+    
+    // Apply final gain and depth masking
+    sharp = saturate(sharp * 3.15 * depthMask);
 
     return float4(blendedColor, sharp);
 }
@@ -395,7 +409,8 @@ float4 Out(float4 position : SV_Position, float2 texcoord : TEXCOORD ) : SV_Targ
     float4 maxBox = max(max(top, max(bottom, max(left, max(right, center)))), max(topLeft, max(topRight, max(bottomLeft, bottomRight))));
     float4 minBox = min(min(top, min(bottom, min(left, min(right, center)))), min(topLeft, min(topRight, min(bottomLeft, bottomRight))));
 
-    float contrast    = 0.6;
+    // Set CAS noise floor to zero to allow full reconstruction from the temporal pass
+    float contrast    = 0.0;
     float sharpAmount = saturate(maxBox.a); 
 
     float4 crossWeight = -rcp(rsqrt(saturate(min(minBox, 1.0 - maxBox) * rcp(maxBox))) * (-3.0 * contrast + 8.0));
