@@ -1,20 +1,19 @@
 # TFAA 2.0 - Universal Edition
 
-A modified version of Temporal Filter Anti-Aliasing (TFAA) for ReShade, optimized for broader compatibility and improved resource handling.
+A modified version of Temporal Filter Anti-Aliasing (TFAA) for ReShade, optimized for cross-provider compatibility and frametime-independent accumulation.
 
 ## Changes in 2.0
-- **Motion Clarity Fix:** Implemented a new motion-kickstart curve with 160.0x scaling and 3.15x gain to eliminate TAA smear.
-- **Universal Motion Bridge:** Added a UI dropdown for iMMERSE: Launchpad, vort_MotionEffects, and LUMENITE: Kernel motion vector providers.
-- **Optimization:** Refactored codebase for improved performance and reduced binary size.
-- **Precision Sampling:** Optimized neighborhood sampling math to eliminate sub-pixel blurring.
-- **Bug Fixes:** Resolved history buffer resource pooling conflicts and depth-buffer inversion issues.
+- **Dynamic Motion Scaling:** Integrated a motion-kickstart curve with 160.0x scaling to eliminate temporal smearing during fast camera movement.
+- **Frametime Normalization:** Blending weights are now calibrated against a 48 FPS baseline to ensure consistent AA strength across varying refresh rates.
+- **Universal Motion Bridge:** Added native support for iMMERSE: Launchpad, vort_MotionEffects, LUMENITE: Kernel, and Zenteon: Motion.
+- **Precision Sampling:** Implemented 5-tap Catmull-Rom bicubic history reconstruction to reduce sub-pixel blurring.
+- **Stability Fixes:** Resolved depth-buffer inversion logic and history buffer resource pooling conflicts.
 
 ## Installation and Requirements
-- Install the latest ReShade build.
+- Install the latest version of ReShade.
 - Place `TFAA_2.0.fx` in your `reshade-shaders/Shaders` directory.
-- Install a supported motion vector provider. It is compatible with: **iMMERSE Launchpad**, **vort_MotionEffects**, and **LUMENITE: Kernel**.
-- Ensure the depth buffer is detected correctly using the `DisplayDepth.fx` shader. If it isn't, click "Edit global preprocessor definitions" and adjust the "Reversed", "Upside Down", or "Logarithmic" settings until the depth map displays correctly.
-- Ensure you are using the correct load order as shown below:
+- Requires a supported motion vector provider: **iMMERSE Launchpad**, **vort_MotionEffects**, **LUMENITE: Kernel**, or **Zenteon: Motion**.
+- Use `DisplayDepth.fx` to verify your depth buffer settings (Reversed, Logarithmic, etc.) before enabling the shader.
 
 ## Load Order
 1. Spatial Anti-Aliasing
