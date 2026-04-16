@@ -1,21 +1,14 @@
 /*=============================================================================
-    TFAA (2.0) - Universal Edition
-    Temporal Filter Anti-Aliasing Shader
+    TFAA 2.0 - Universal Edition
     
-    First published 2025 - Copyright, Jakob Wapenhensch
-    Modified & Optimized by maksymilianlt (2026)
-    
-    Key Updates: 
-    - Implemented Universal Motion Bridge (Launchpad, VORT, Lumenite)
-    - Resolved history buffer resource pooling conflicts
-    - Refactored codebase for improved performance and reduced binary size
-    - Optimized neighborhood sampling math to eliminate sub-pixel blurring
+    Copyright, Jakob Wapenhensch
+    Modified by maksymilianlt (2026)
     
     License: CC BY-NC 4.0 (https://creativecommons.org/licenses/by-nc/4.0/)
 =============================================================================*/
 
 /*=============================================================================
-    Resources & Global Includes
+    Resources
 =============================================================================*/
 
 #include "ReShadeUI.fxh"
@@ -26,14 +19,14 @@
 #endif
 
 /*=============================================================================
-    Compatibility & Format Settings
+    Setup
 =============================================================================*/
 
-// Compatibility mode for OpenGL. Set this to 1 in Preprocessor Definitions if playing OpenGL-based games or if the shader fails to display.
 #ifndef TFAA_USE_OPENGL_COMPATIBILITY
     #define TFAA_USE_OPENGL_COMPATIBILITY 0
 #endif
 
+// Select high-precision accumulation format unless OpenGL restricted
 #if TFAA_USE_OPENGL_COMPATIBILITY
     #define TFAA_FORMAT RGBA8
 #else
@@ -41,16 +34,15 @@
 #endif
 
 /*=============================================================================
-    Global Constants & Uniforms
+    Constants
 =============================================================================*/
 
-// Uniform variable to access the frame time.
 uniform float frametime < source = "frametime"; >;
 
-// Constant for temporal weights adjustment based on a 48 FPS baseline.
+// Calibration target for frametime-independent blending
 static const float fpsConst = (1000.0 / 48.0);
 
-// Discrete sampling grid for 3x3 neighborhood kernels.
+// 3x3 pixel kernel offsets
 static const float2 nOffsets[9] = { 
     float2(-1, -1), float2(0, -1), float2(1, -1), 
     float2(-1,  0), float2(0,  0), float2(1,  0), 
@@ -58,15 +50,15 @@ static const float2 nOffsets[9] = {
 };
 
 /*=============================================================================
-    UI Uniforms
+    UI
 =============================================================================*/
 
 uniform int UI_MOTION_SOURCE <
     ui_type = "combo";
     ui_label = "Motion Vector Source";
-    ui_items = "iMMERSE: Launchpad\0vort_MotionEffects\0LUMENITE: Kernel\0";
+    ui_items = "iMMERSE: Launchpad\0vort_MotionEffects\0LUMENITE: Kernel\0Zenteon: Motion\0";
     ui_category = "Temporal Filter";
-    ui_tooltip = "Select the provider for motion vectors. Ensure the corresponding shader is active in your preset.";
+    ui_tooltip = "Select the provider for motion vectors.";
 > = 0;
 
 uniform float UI_TEMPORAL_FILTER_STRENGTH <
@@ -91,13 +83,12 @@ uniform float UI_POST_SHARPEN <
     Textures & Samplers
 =============================================================================*/
 
-// Texture and sampler for depth input.
+// Primary input buffers
 texture texDepthIn : DEPTH;
 sampler smpDepthIn { 
     Texture = texDepthIn; 
 };
 
-// Texture and sampler for the current frame's color.
 texture texInCur : COLOR;
 sampler smpInCur { 
     Texture   = texInCur; 
@@ -108,7 +99,7 @@ sampler smpInCur {
     MagFilter = Linear; 
 };
 
-// Backup texture for the current frame's color.
+// Intermediate and history accumulation buffers
 texture texInCurBackup { 
     Width  = BUFFER_WIDTH; 
     Height = BUFFER_HEIGHT; 
@@ -124,7 +115,6 @@ sampler smpInCurBackup {
     MagFilter = Linear; 
 };
 
-// Texture for storing the exponential frame buffer.
 texture texExpColor { 
     Width = BUFFER_WIDTH; 
     Height = BUFFER_HEIGHT; 
@@ -140,7 +130,6 @@ sampler smpExpColor {
     MagFilter = Linear; 
 };
 
-// Backup texture for the exponential frame buffer.
 texture texExpColorBackup { 
     Width = BUFFER_WIDTH; 
     Height = BUFFER_HEIGHT; 
@@ -156,7 +145,7 @@ sampler smpExpColorBackup {
     MagFilter = Linear; 
 };
 
-// Backup texture for the last frame's depth.
+// Point-sampled depth history for precise motion rejection
 texture texDepthBackup { 
     Width = BUFFER_WIDTH; 
     Height = BUFFER_HEIGHT; 
@@ -173,12 +162,12 @@ sampler smpDepthBackup {
 };
 
 /*=============================================================================
-    Functions
+    Utilities
 =============================================================================*/
 
 float4 tex2Dlod(sampler s, float2 uv, float mip) { return tex2Dlod(s, float4(uv, 0, mip)); }
 
-// Color Space Conversions (YCbCr)
+// Rec.601 YCbCr conversion for luma-based neighborhood clipping
 float3 cvtRgb2YCbCr(float3 rgb)
 {
     float y  = 0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b;
@@ -196,11 +185,10 @@ float3 cvtYCbCr2Rgb(float3 YCbCr)
     );
 }
 
-// Internal wrapper for temporal logic
 float3 cvtRgb2whatever(float3 rgb) { return cvtRgb2YCbCr(rgb); }
 float3 cvtWhatever2Rgb(float3 whatever) { return cvtYCbCr2Rgb(whatever); }
 
-// High-quality bicubic sampling (Inspired by Marty Robbins)
+// 5-tap Catmull-Rom bicubic filter for high-fidelity history reconstruction
 float4 bicubic_5(sampler source, float2 texcoord)
 {
     float2 texsize = tex2Dsize(source);
@@ -231,13 +219,12 @@ float4 bicubic_5(sampler source, float2 texcoord)
     return max(0, ret * (1.0 / (1.0 - (f.x - f2.x) * (f.y - f2.y) * 0.25)));
 }
 
-// Helper to sample history with bicubic filtering
 float4 sampleHistory(sampler2D historySampler, float2 texcoord)
 {
     return bicubic_5(historySampler, texcoord);
 }
 
-// Linearizes depth and handles reversed depth buffers
+// Linearizes non-linear depth buffer input
 float getDepth(float2 texcoord)
 {
     float depth = tex2Dlod(smpDepthIn, texcoord, 0).x;
@@ -254,10 +241,15 @@ float getDepth(float2 texcoord)
 }
 
 /*=============================================================================
-    Motion Vector Imports (Universal Bridge)
+    Motion Bridge
 =============================================================================*/
 
-// --- Lumenite Kernel Hook ---
+// Resource declarations for external motion vector providers
+texture2D texMotionVectors { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RGBA16F; };
+texture2D tDOC              { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = R8;    };
+sampler2D sZenteonMV  { Texture = texMotionVectors; };
+sampler2D sZenteonDOC { Texture = tDOC; };
+
 texture2D tLumaFlow { Width = BUFFER_WIDTH/8; Height = BUFFER_HEIGHT/8; Format = RG16F; };
 sampler2D sLumaFlow { 
     Texture = tLumaFlow; 
@@ -265,7 +257,6 @@ sampler2D sLumaFlow {
     AddressU = CLAMP; AddressV = CLAMP; 
 };
 
-// --- VORT Motion Hook ---
 texture2D MotVectTexVort { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
 sampler2D sMotVectTexVort { 
     Texture = MotVectTexVort; 
@@ -273,7 +264,6 @@ sampler2D sMotVectTexVort {
     AddressU = CLAMP; AddressV = CLAMP; 
 };
 
-// --- iMMERSE Launchpad Hook (Deferred Integration) ---
 namespace Deferred 
 {
     texture MotionVectorsTex { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
@@ -285,33 +275,36 @@ namespace Deferred
     }
 }
 
+// Routes motion vector data from selected source to the temporal resolver
 float2 get_universal_motion(float2 uv)
 {
-    if (UI_MOTION_SOURCE == 0) // iMMERSE: Launchpad
+    if (UI_MOTION_SOURCE == 0)
     {
         return Deferred::get_motion(uv);
     }
-    else if (UI_MOTION_SOURCE == 1) // vort_MotionEffects
+    else if (UI_MOTION_SOURCE == 1)
     {
         return tex2Dlod(sMotVectTexVort, uv, 0).rg;
     }
-    else // LUMENITE: Kernel (Index 2)
+    else if (UI_MOTION_SOURCE == 2)
     {
         return tex2Dlod(sLumaFlow, uv, 0).xy;
+    }
+    else
+    {
+        return tex2Dlod(sZenteonMV, uv, 0).xy;
     }
 }
 
 /*=============================================================================
-    Shader Pass Functions
+    Shader Passes
 =============================================================================*/
 
-// Capture current frame and depth for the temporal neighborhood
 float4 SaveCur(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_Target0
 {
     return float4(tex2Dlod(smpInCur, texcoord, 0).rgb, getDepth(texcoord));
 }
 
-// Main Temporal logic: Blends history using motion, contrast, and depth masks
 float4 TemporalFilter(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
 {
     float4 sampleCur = tex2Dlod(smpInCurBackup, texcoord, 0);
@@ -321,6 +314,7 @@ float4 TemporalFilter(float4 position : SV_Position, float2 texcoord : TEXCOORD)
     float4 minimumCvt = 2;
     float4 maximumCvt = -1;
 
+    // 3x3 neighborhood clipping search
     for (int i = 0; i < 9; i++)
     {
         float4 neighborhoodSample = tex2Dlod(smpInCurBackup, texcoord + (nOffsets[i] * ReShade::PixelSize), 0);
@@ -334,67 +328,63 @@ float4 TemporalFilter(float4 position : SV_Position, float2 texcoord : TEXCOORD)
 
     float2 motion = get_universal_motion(texcoord + (nOffsets[closestDepthIndex] * ReShade::PixelSize));
     float2 lastSamplePos = texcoord + motion;
+    
+    float zenteonOcclusion = 1.0;
+    if (UI_MOTION_SOURCE == 3) {
+        zenteonOcclusion = tex2Dlod(sZenteonDOC, texcoord, 0).x;
+    }
 
     float lastDepth = tex2Dlod(smpDepthBackup, lastSamplePos, 0).r;
     float4 sampleExp = saturate(sampleHistory(smpExpColorBackup, lastSamplePos));
 
     float localContrast = saturate(pow(abs(maximumCvt.r - minimumCvt.r), 0.75));
     
-    // Normalize motion magnitude for high-precision sensitivity
     float motionMagnitude = length(motion) * 160.0; 
     float speedFactor = 1.0 - pow(saturate(motionMagnitude * 0.125), 0.5);
 
-    // Calculate depth-based rejection with zero-division safety
     float depthDelta = max(0, saturate(minimumCvt.a - lastDepth)) / max(sampleCur.a, 0.0001);
     float depthMask = saturate(1.0 - pow(depthDelta * 4, 4));
 
-    // Temporal weight calculation with fps compensation
+    // Normalize temporal accumulation for 48 FPS baseline
     float baseLeak = 1.0 - lerp(0.50, 0.98, UI_TEMPORAL_FILTER_STRENGTH);
     float adjustedLeak = pow(abs(baseLeak), frametime / fpsConst);
 
     float weight = saturate(1.0 - adjustedLeak);
     weight = lerp(weight, weight * (0.6 + localContrast * 2), 0.5);
-    weight = clamp(weight * speedFactor * depthMask, 0.0, 0.95);
+    weight = clamp(weight * speedFactor * depthMask * zenteonOcclusion, 0.0, 0.95);
 
     float4 sampleExpClamped = float4(cvtWhatever2Rgb(clamp(cvtRgb2whatever(sampleExp.rgb), minimumCvt.rgb, maximumCvt.rgb)), sampleExp.a);
 
+    // Color blending in non-linear power space
     const static float correctionFactor = 2;
     float3 blendedColor = saturate(pow(lerp(pow(sampleCur.rgb, correctionFactor), pow(sampleExpClamped.rgb, correctionFactor), weight), (1.0 / correctionFactor)));
 
-    // Restore aggressive reconstruction curve for zero-blur motion
     float motionKick = motionMagnitude > 0.0 ? 0.2 : 0.0;
     float reconstructionCurve = saturate(motionKick + pow(saturate(motionMagnitude), 0.35));
     
-    // Detect luma variance for blur compensation
     float lumaError = saturate(abs(sampleCur.r - sampleExpClamped.r) * 25.0);
 
-    // Calculate adaptive sharpening weight
     float sharp = reconstructionCurve * lumaError * weight * (1.25 + localContrast) * UI_POST_SHARPEN;
     
-    // Apply final gain and depth masking
     sharp = saturate(sharp * 3.15 * depthMask);
 
     return float4(blendedColor, sharp);
 }
 
-// Commit results to history buffers
 void SavePost(float4 position : SV_Position, float2 texcoord : TEXCOORD, out float4 lastExpOut : SV_Target0, out float depthOnly : SV_Target1)
 {
     lastExpOut = tex2Dlod(smpExpColor, texcoord, 0);
     depthOnly = getDepth(texcoord);
 }
 
-// Final output pass with adaptive sharpening (CAS-style)
 float4 Out(float4 position : SV_Position, float2 texcoord : TEXCOORD ) : SV_Target
 {
-    // Optimized 3x3 Neighborhood Sampling using nOffsets
     float4 neighbors[9];
     for(int i = 0; i < 9; i++)
     {
         neighbors[i] = tex2Dlod(smpExpColor, texcoord + (nOffsets[i] * ReShade::PixelSize), 0);
     }
 
-    // Direct Mapping for Logic Clarity
     float4 topLeft     = neighbors[0];
     float4 top         = neighbors[1];
     float4 topRight    = neighbors[2];
@@ -405,11 +395,10 @@ float4 Out(float4 position : SV_Position, float2 texcoord : TEXCOORD ) : SV_Targ
     float4 bottom      = neighbors[7];
     float4 bottomRight = neighbors[8];
 
-    // Compute Min/Max for contrast detection
     float4 maxBox = max(max(top, max(bottom, max(left, max(right, center)))), max(topLeft, max(topRight, max(bottomLeft, bottomRight))));
     float4 minBox = min(min(top, min(bottom, min(left, min(right, center)))), min(topLeft, min(topRight, min(bottomLeft, bottomRight))));
 
-    // Set CAS noise floor to zero to allow full reconstruction from the temporal pass
+    // Apply sharpening using CAS weighting logic
     float contrast    = 0.0;
     float sharpAmount = saturate(maxBox.a); 
 
@@ -420,13 +409,13 @@ float4 Out(float4 position : SV_Position, float2 texcoord : TEXCOORD ) : SV_Targ
 }
 
 /*=============================================================================
-    Shader Technique: TFAA
+    Technique
 =============================================================================*/
 
 technique TFAA
 <
-    ui_label = "TFAA (2.0)";
-    ui_tooltip = "Temporal Filter Anti-Aliasing | Universal Edition\n\nSupports Launchpad, VORT, and Lumenite motion vectors.";
+    ui_label = "TFAA 2.0";
+    ui_tooltip = "Temporal Filter Anti-Aliasing";
 >
 {
     pass { VertexShader = PostProcessVS; PixelShader = SaveCur; RenderTarget = texInCurBackup; }
