@@ -4,10 +4,10 @@ A modified version of Temporal Filter Anti-Aliasing (TFAA) for ReShade, optimize
 
 ## Changes in 2.0
 - **Dynamic Motion Scaling:** Integrated a motion-kickstart curve with 160.0x scaling to eliminate temporal smearing during fast camera movement.
-- **Frametime Normalization:** Blending weights are now calibrated against a 48 FPS baseline to ensure consistent AA strength across varying refresh rates.
+- **Real-Time FPS Synchronization:** Replaced the static 48 FPS baseline with dynamic frametime scaling. Blending weights now synchronize 1:1 with your current refresh rate for maximum clarity and zero accumulation lag.
 - **Universal Motion Bridge:** Added native support for iMMERSE: Launchpad, vort_MotionEffects, LUMENITE: Kernel, and Zenteon: Motion.
 - **Precision Sampling:** Implemented 5-tap Catmull-Rom bicubic history reconstruction to reduce sub-pixel blurring.
-- **Stability Fixes:** Resolved depth-buffer inversion logic and history buffer resource pooling conflicts.
+- **Stability Fixes:** Resolved depth-buffer inversion logic and history buffer resource pooling conflicts, including division-by-zero crash guards for zero-frametime scenarios.
 
 ## Installation and Requirements
 - Install the latest version of ReShade.
