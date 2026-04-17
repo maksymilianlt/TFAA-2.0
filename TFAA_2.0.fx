@@ -39,8 +39,8 @@
 
 uniform float frametime < source = "frametime"; >;
 
-// Calibration target for frametime-independent blending
-static const float fpsConst = (1000.0 / 48.0);
+// Calculate current framerate
+#define currentFPS (1000.0 / max(frametime, 0.001))
 
 // 3x3 pixel kernel offsets
 static const float2 nOffsets[9] = { 
@@ -345,9 +345,10 @@ float4 TemporalFilter(float4 position : SV_Position, float2 texcoord : TEXCOORD)
     float depthDelta = max(0, saturate(minimumCvt.a - lastDepth)) / max(sampleCur.a, 0.0001);
     float depthMask = saturate(1.0 - pow(depthDelta * 4, 4));
 
-    // Normalize temporal accumulation for 48 FPS baseline
     float baseLeak = 1.0 - lerp(0.50, 0.98, UI_TEMPORAL_FILTER_STRENGTH);
-    float adjustedLeak = pow(abs(baseLeak), frametime / fpsConst);
+
+    // Sync baseline to current framerate
+    float adjustedLeak = pow(abs(baseLeak), frametime / (1000.0 / currentFPS));
 
     float weight = saturate(1.0 - adjustedLeak);
     weight = lerp(weight, weight * (0.6 + localContrast * 2), 0.5);
