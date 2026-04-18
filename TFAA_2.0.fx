@@ -49,6 +49,10 @@ static const float2 nOffsets[9] = {
     float2(-1,  1), float2(0,  1), float2(1,  1) 
 };
 
+// Mathematically calibrated references
+static const float stabilityRef = 0.275251;
+static const float sharpenRef   = 0.5;
+
 /*=============================================================================
     UI
 =============================================================================*/
@@ -61,23 +65,25 @@ uniform int UI_MOTION_SOURCE <
     ui_tooltip = "Select the provider for motion vectors.";
 > = 0;
 
-uniform float UI_TEMPORAL_FILTER_STRENGTH <
+uniform float UI_TEMPORAL_MULTIPLIER <
     ui_type    = "slider";
-    ui_min     = 0.0; 
-    ui_max     = 1.0; 
+    ui_min     = 0.5; 
+    ui_max     = 1.5; 
     ui_step    = 0.01;
-    ui_label   = "Temporal Filter Strength";
+    ui_label   = "Temporal Accumulation Multiplier";
     ui_category= "Temporal Filter";
-> = 0.5;
+    ui_tooltip = "Scales the temporal accumulation strength.";
+> = 1.0;
 
-uniform float UI_POST_SHARPEN <
-    ui_type    = "slider";
-    ui_min     = 0.0; 
-    ui_max     = 1.0; 
-    ui_step    = 0.01;
-    ui_label   = "Adaptive Sharpening";
-    ui_category= "Temporal Filter";
-> = 0.5;
+uniform float UI_SHARPEN_MULTIPLIER <
+    ui_type     = "slider";
+    ui_min      = 0.0; 
+    ui_max      = 1.5; 
+    ui_step     = 0.01;
+    ui_label    = "Adaptive Sharpening Multiplier";
+    ui_category = "Temporal Filter";
+    ui_tooltip  = "Scales the adaptive sharpening strength.";
+> = 1.0;
 
 /*=============================================================================
     Textures & Samplers
@@ -345,7 +351,8 @@ float4 TemporalFilter(float4 position : SV_Position, float2 texcoord : TEXCOORD)
     float depthDelta = max(0, saturate(minimumCvt.a - lastDepth)) / max(sampleCur.a, 0.0001);
     float depthMask = saturate(1.0 - pow(depthDelta * 4, 4));
 
-    float baseLeak = 1.0 - lerp(0.50, 0.98, UI_TEMPORAL_FILTER_STRENGTH);
+    float strength = saturate(stabilityRef * UI_TEMPORAL_MULTIPLIER);
+    float baseLeak = 1.0 - lerp(0.50, 0.98, strength);
 
     // Sync baseline to current framerate
     float adjustedLeak = pow(abs(baseLeak), frametime / (1000.0 / currentFPS));
@@ -365,8 +372,9 @@ float4 TemporalFilter(float4 position : SV_Position, float2 texcoord : TEXCOORD)
     
     float lumaError = saturate(abs(sampleCur.r - sampleExpClamped.r) * 25.0);
 
-    float sharp = reconstructionCurve * lumaError * weight * (1.25 + localContrast) * UI_POST_SHARPEN;
-    
+    float sharpAmount = sharpenRef * UI_SHARPEN_MULTIPLIER;
+    float sharp = reconstructionCurve * lumaError * weight * (1.25 + localContrast) * sharpAmount;
+
     sharp = saturate(sharp * 3.15 * depthMask);
 
     return float4(blendedColor, sharp);
