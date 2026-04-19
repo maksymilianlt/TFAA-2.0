@@ -67,8 +67,8 @@ uniform int UI_MOTION_SOURCE <
 
 uniform float UI_TEMPORAL_MULTIPLIER <
     ui_type    = "slider";
-    ui_min     = 0.5; 
-    ui_max     = 1.5; 
+    ui_min      = 0.0; 
+    ui_max      = 2.0;
     ui_step    = 0.01;
     ui_label   = "Temporal Accumulation Multiplier";
     ui_category= "Temporal Filter";
@@ -78,7 +78,7 @@ uniform float UI_TEMPORAL_MULTIPLIER <
 uniform float UI_SHARPEN_MULTIPLIER <
     ui_type     = "slider";
     ui_min      = 0.0; 
-    ui_max      = 1.5; 
+    ui_max      = 2.0;
     ui_step     = 0.01;
     ui_label    = "Adaptive Sharpening Multiplier";
     ui_category = "Temporal Filter";
