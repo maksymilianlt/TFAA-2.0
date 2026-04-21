@@ -173,21 +173,21 @@ sampler smpDepthBackup {
 
 float4 tex2Dlod(sampler s, float2 uv, float mip) { return tex2Dlod(s, float4(uv, 0, mip)); }
 
-// Rec.601 YCbCr conversion for luma-based neighborhood clipping
+// Rec.709 YCbCr conversion
 float3 cvtRgb2YCbCr(float3 rgb)
 {
-    float y  = 0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b;
-    float cb = (rgb.b - y) * 0.565;
-    float cr = (rgb.r - y) * 0.713;
+    float y  = 0.2126 * rgb.r + 0.7152 * rgb.g + 0.0722 * rgb.b;
+    float cb = (rgb.b - y) * 0.5389; 
+    float cr = (rgb.r - y) * 0.6350; 
     return float3(y, cb, cr);
 }
 
 float3 cvtYCbCr2Rgb(float3 YCbCr)
 {
     return float3(
-        YCbCr.x + 1.403 * YCbCr.z,
-        YCbCr.x - 0.344 * YCbCr.y - 0.714 * YCbCr.z,
-        YCbCr.x + 1.770 * YCbCr.y
+        YCbCr.x + 1.5748 * YCbCr.z,
+        YCbCr.x - 0.1873 * YCbCr.y - 0.4681 * YCbCr.z,
+        YCbCr.x + 1.8556 * YCbCr.y
     );
 }
 
@@ -367,13 +367,14 @@ float4 TemporalFilter(float4 position : SV_Position, float2 texcoord : TEXCOORD)
     const static float correctionFactor = 2;
     float3 blendedColor = saturate(pow(lerp(pow(sampleCur.rgb, correctionFactor), pow(sampleExpClamped.rgb, correctionFactor), weight), (1.0 / correctionFactor)));
 
-    float motionKick = motionMagnitude > 0.0 ? 0.2 : 0.0;
-    float reconstructionCurve = saturate(motionKick + pow(saturate(motionMagnitude), 0.35));
+    float motionKick = motionMagnitude > (1.0 / 255.0) ? (1.0 / 3.0) : 0.0;
     
-    float lumaError = saturate(abs(sampleCur.r - sampleExpClamped.r) * 25.0);
+    float reconstructionCurve = saturate(motionKick + pow(saturate(motionMagnitude), (1.0 / 3.0)));
+    
+    float lumaError = saturate(abs(sampleCur.r - sampleExpClamped.r) * (100.0 / 3.0));
 
     float sharpAmount = sharpenRef * UI_SHARPEN_MULTIPLIER;
-    float sharp = reconstructionCurve * lumaError * weight * (1.25 + localContrast) * sharpAmount;
+    float sharp = reconstructionCurve * lumaError * weight * (1.0 + localContrast) * sharpAmount;
 
     sharp = saturate(sharp * 3.15 * depthMask);
 
