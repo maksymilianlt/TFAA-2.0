@@ -4,6 +4,7 @@ A modified version of Temporal Filter Anti-Aliasing (TFAA) for ReShade, optimize
 
 ## Changes in 2.0
 - **Mathematical Reference Calibration:** Synchronized accumulation and sharpening baselines to mathematically calibrated references.
+- **Motion Stability & Gain Calibration:** Added a motion noise floor to stop sharpening flicker and calibrated the gain.
 - **Rec.709 Integration:** Migrated from Rec.601 luma conversion to Rec.709 luma conversion to align with modern color-space standards.
 - **Real-Time FPS Synchronization:** Replaced the static 48 FPS baseline with dynamic frametime scaling. Blending weights now synchronize 1:1 with your current refresh rate for maximum clarity and zero accumulation lag.
 - **Universal Motion Bridge:** Added native support for iMMERSE: Launchpad, vort_MotionEffects, LUMENITE: Kernel, and Zenteon: Motion.
