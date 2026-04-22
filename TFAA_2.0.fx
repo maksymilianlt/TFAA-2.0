@@ -367,7 +367,7 @@ float4 TemporalFilter(float4 position : SV_Position, float2 texcoord : TEXCOORD)
     const static float correctionFactor = 2;
     float3 blendedColor = saturate(pow(lerp(pow(sampleCur.rgb, correctionFactor), pow(sampleExpClamped.rgb, correctionFactor), weight), (1.0 / correctionFactor)));
 
-    float motionKick = motionMagnitude > (1.0 / 255.0) ? (1.0 / 3.0) : 0.0;
+    float motionKick = smoothstep(2.0 / 255.0, 4.0 / 255.0, motionMagnitude) * (1.0 / 10.0);
     
     float reconstructionCurve = saturate(motionKick + pow(saturate(motionMagnitude), (1.0 / 3.0)));
     
