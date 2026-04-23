@@ -19,21 +19,6 @@
 #endif
 
 /*=============================================================================
-    Setup
-=============================================================================*/
-
-#ifndef TFAA_USE_OPENGL_COMPATIBILITY
-    #define TFAA_USE_OPENGL_COMPATIBILITY 0
-#endif
-
-// Select high-precision accumulation format unless OpenGL restricted
-#if TFAA_USE_OPENGL_COMPATIBILITY
-    #define TFAA_FORMAT RGBA8
-#else
-    #define TFAA_FORMAT RGBA16F
-#endif
-
-/*=============================================================================
     Constants
 =============================================================================*/
 
@@ -124,7 +109,7 @@ sampler smpInCurBackup {
 texture texExpColor { 
     Width = BUFFER_WIDTH; 
     Height = BUFFER_HEIGHT; 
-    Format = TFAA_FORMAT; 
+    Format = RGBA16F; 
 };
 
 sampler smpExpColor { 
@@ -139,7 +124,7 @@ sampler smpExpColor {
 texture texExpColorBackup { 
     Width = BUFFER_WIDTH; 
     Height = BUFFER_HEIGHT; 
-    Format = TFAA_FORMAT; 
+    Format = RGBA16F; 
 };
 
 sampler smpExpColorBackup { 
