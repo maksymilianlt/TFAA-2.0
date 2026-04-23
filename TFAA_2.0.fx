@@ -70,6 +70,30 @@ uniform float UI_SHARPEN_MULTIPLIER <
     ui_tooltip  = "Scales the adaptive sharpening strength.";
 > = 1.0;
 
+uniform bool UI_DEPTH_DEBUG <
+    ui_label = "Display Depth Debug";
+    ui_category = "Depth Buffer Settings";
+> = false;
+
+uniform int UI_DEPTH_ORIENTATION <
+    ui_type = "combo";
+    ui_label = "Depth Orientation";
+    ui_items = "Normal\0Reversed\0";
+    ui_category = "Depth Buffer Settings";
+> = 0;
+
+uniform float UI_DEPTH_ADJUST <
+    ui_type = "slider";
+    ui_min = 1.0; ui_max = 1000.0; ui_step = 0.125;
+    ui_label = "Depth Map Adjustment";
+    ui_category = "Depth Buffer Settings";
+> = 250.0;
+
+uniform bool UI_DEPTH_UPSIDE_DOWN <
+    ui_label = "Upside Down";
+    ui_category = "Depth Buffer Settings";
+> = false;
+
 /*=============================================================================
     Textures & Samplers
 =============================================================================*/
@@ -94,7 +118,7 @@ sampler smpInCur {
 texture texInCurBackup { 
     Width  = BUFFER_WIDTH; 
     Height = BUFFER_HEIGHT; 
-    Format = RGBA8; 
+    Format = RGBA16F; 
 };
 
 sampler smpInCurBackup { 
@@ -218,17 +242,21 @@ float4 sampleHistory(sampler2D historySampler, float2 texcoord)
 // Linearizes non-linear depth buffer input
 float getDepth(float2 texcoord)
 {
-    float depth = tex2Dlod(smpDepthIn, texcoord, 0).x;
+    if (UI_DEPTH_UPSIDE_DOWN) texcoord.y = 1.0 - texcoord.y;
 
-    #if RESHADE_DEPTH_INPUT_IS_REVERSED
-        depth = 1.0 - depth;
-    #endif
+    float zBuffer = tex2Dlod(smpDepthIn, texcoord, 0).x;
 
-    const float N = 1.0;
-    float factor = RESHADE_DEPTH_LINEARIZATION_FAR_PLANE * 0.1;
-    depth /= factor - depth * (factor - N);
+    float Far = 1.0; 
+    float Near = 0.125 / UI_DEPTH_ADJUST;
 
-    return depth;
+    if (UI_DEPTH_ORIENTATION == 1)
+    {
+        zBuffer = 1.0 - zBuffer;
+    }
+
+    float depth = Far * Near / (Far + zBuffer * (Near - Far));
+
+    return saturate(depth);
 }
 
 /*=============================================================================
@@ -400,7 +428,15 @@ float4 Out(float4 position : SV_Position, float2 texcoord : TEXCOORD ) : SV_Targ
     float4 crossWeight = -rcp(rsqrt(saturate(min(minBox, 1.0 - maxBox) * rcp(maxBox))) * (-3.0 * contrast + 8.0));
     float4 rcpWeight = rcp(4.0 * crossWeight + 1.0);
     
-    return lerp(center, saturate(((top + bottom + left + right) * crossWeight + center) * rcpWeight), sharpAmount);
+    float4 result = lerp(center, saturate(((top + bottom + left + right) * crossWeight + center) * rcpWeight), sharpAmount);
+    
+    if (UI_DEPTH_DEBUG)
+    {
+        float d = getDepth(texcoord);
+        return float4(d.xxx, 1.0);
+    }
+
+    return result;
 }
 
 /*=============================================================================
