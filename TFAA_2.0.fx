@@ -14,29 +14,23 @@
 #include "ReShadeUI.fxh"
 #include "ReShade.fxh"
 
-#ifndef RESHADE_DEPTH_LINEARIZATION_FAR_PLANE
-    #define RESHADE_DEPTH_LINEARIZATION_FAR_PLANE 1000.0
-#endif
-
 /*=============================================================================
     Constants
 =============================================================================*/
 
-uniform float frametime < source = "frametime"; >;
-
-// Calculate current framerate
-#define currentFPS (1000.0 / max(frametime, 0.001))
-
 // 3x3 pixel kernel offsets
 static const float2 nOffsets[9] = { 
-    float2(-1, -1), float2(0, -1), float2(1, -1), 
-    float2(-1,  0), float2(0,  0), float2(1,  0), 
-    float2(-1,  1), float2(0,  1), float2(1,  1) 
+    float2(-BUFFER_RCP_WIDTH, -BUFFER_RCP_HEIGHT), float2(0, -BUFFER_RCP_HEIGHT), float2(BUFFER_RCP_WIDTH, -BUFFER_RCP_HEIGHT), 
+    float2(-BUFFER_RCP_WIDTH,  0),                  float2(0,  0),                  float2(BUFFER_RCP_WIDTH,  0), 
+    float2(-BUFFER_RCP_WIDTH,  BUFFER_RCP_HEIGHT),  float2(0,  BUFFER_RCP_HEIGHT),  float2(BUFFER_RCP_WIDTH,  BUFFER_RCP_HEIGHT) 
 };
 
 // Mathematically calibrated references
 static const float stabilityRef = 0.275251;
 static const float sharpenRef   = 0.5;
+
+// Rec.709 Luma coefficients
+static const float3 LumaWeights = float3(0.2126, 0.7152, 0.0722);
 
 /*=============================================================================
     UI
@@ -185,10 +179,8 @@ float4 tex2Dlod(sampler s, float2 uv, float mip) { return tex2Dlod(s, float4(uv,
 // Rec.709 YCbCr conversion
 float3 cvtRgb2YCbCr(float3 rgb)
 {
-    float y  = 0.2126 * rgb.r + 0.7152 * rgb.g + 0.0722 * rgb.b;
-    float cb = (rgb.b - y) * 0.5389; 
-    float cr = (rgb.r - y) * 0.6350; 
-    return float3(y, cb, cr);
+    float y = dot(rgb, LumaWeights);
+    return float3(y, (rgb.b - y) * 0.5389, (rgb.r - y) * 0.6350);
 }
 
 float3 cvtYCbCr2Rgb(float3 YCbCr)
@@ -199,9 +191,6 @@ float3 cvtYCbCr2Rgb(float3 YCbCr)
         YCbCr.x + 1.8556 * YCbCr.y
     );
 }
-
-float3 cvtRgb2whatever(float3 rgb) { return cvtRgb2YCbCr(rgb); }
-float3 cvtWhatever2Rgb(float3 whatever) { return cvtYCbCr2Rgb(whatever); }
 
 // 5-tap Catmull-Rom bicubic filter for high-fidelity history reconstruction
 float4 bicubic_5(sampler source, float2 texcoord)
@@ -234,29 +223,18 @@ float4 bicubic_5(sampler source, float2 texcoord)
     return max(0, ret * (1.0 / (1.0 - (f.x - f2.x) * (f.y - f2.y) * 0.25)));
 }
 
-float4 sampleHistory(sampler2D historySampler, float2 texcoord)
-{
-    return bicubic_5(historySampler, texcoord);
-}
-
 // Linearizes non-linear depth buffer input
 float getDepth(float2 texcoord)
 {
-    if (UI_DEPTH_UPSIDE_DOWN) texcoord.y = 1.0 - texcoord.y;
+    if (UI_DEPTH_UPSIDE_DOWN == 1) texcoord.y = 1.0 - texcoord.y;
 
     float zBuffer = tex2Dlod(smpDepthIn, texcoord, 0).x;
 
-    float Far = 1.0; 
-    float Near = 0.125 / UI_DEPTH_ADJUST;
+    if (UI_DEPTH_ORIENTATION == 1) zBuffer = 1.0 - zBuffer;
 
-    if (UI_DEPTH_ORIENTATION == 1)
-    {
-        zBuffer = 1.0 - zBuffer;
-    }
+    float expDepth = pow(abs(zBuffer), UI_DEPTH_ADJUST);
 
-    float depth = Far * Near / (Far + zBuffer * (Near - Far));
-
-    return saturate(depth);
+    return saturate(expDepth);
 }
 
 /*=============================================================================
@@ -327,17 +305,19 @@ float4 SaveCur(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_T
 float4 TemporalFilter(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
 {
     float4 sampleCur = tex2Dlod(smpInCurBackup, texcoord, 0);
-    float4 cvtColorCur = float4(cvtRgb2whatever(sampleCur.rgb), sampleCur.a);
+    float3 centerCvt = cvtRgb2YCbCr(sampleCur.rgb);
 
     int closestDepthIndex = 4;
-    float4 minimumCvt = 2;
-    float4 maximumCvt = -1;
+    float4 minimumCvt = float4(centerCvt, sampleCur.a);
+    float4 maximumCvt = float4(centerCvt, sampleCur.a);
 
-    // 3x3 neighborhood clipping search
+    [unroll]
     for (int i = 0; i < 9; i++)
     {
-        float4 neighborhoodSample = tex2Dlod(smpInCurBackup, texcoord + (nOffsets[i] * ReShade::PixelSize), 0);
-        float4 cvt = float4(cvtRgb2whatever(neighborhoodSample.rgb), neighborhoodSample.a);
+        if (i == 4) continue;
+
+        float4 neighborhoodSample = tex2Dlod(smpInCurBackup, texcoord + nOffsets[i], 0);
+        float4 cvt = float4(cvtRgb2YCbCr(neighborhoodSample.rgb), neighborhoodSample.a);
 
         if (neighborhoodSample.a < minimumCvt.a) closestDepthIndex = i;
 
@@ -345,7 +325,7 @@ float4 TemporalFilter(float4 position : SV_Position, float2 texcoord : TEXCOORD)
         maximumCvt = max(maximumCvt, cvt);
     }
 
-    float2 motion = get_universal_motion(texcoord + (nOffsets[closestDepthIndex] * ReShade::PixelSize));
+    float2 motion = get_universal_motion(texcoord + nOffsets[closestDepthIndex]);
     float2 lastSamplePos = texcoord + motion;
     
     float zenteonOcclusion = 1.0;
@@ -354,37 +334,38 @@ float4 TemporalFilter(float4 position : SV_Position, float2 texcoord : TEXCOORD)
     }
 
     float lastDepth = tex2Dlod(smpDepthBackup, lastSamplePos, 0).r;
-    float4 sampleExp = saturate(sampleHistory(smpExpColorBackup, lastSamplePos));
+    float4 sampleExp = saturate(bicubic_5(smpExpColorBackup, lastSamplePos));
 
-    float localContrast = saturate(pow(abs(maximumCvt.r - minimumCvt.r), 0.75));
-    
+    float diff = saturate(maximumCvt.r - minimumCvt.r);
+    float localContrast = diff;
+
     float motionMagnitude = length(motion) * 160.0; 
-    float speedFactor = 1.0 - pow(saturate(motionMagnitude * 0.125), 0.5);
+    float speedFactor = 1.0 - sqrt(saturate(motionMagnitude * 0.125));
 
-    float depthDelta = max(0, saturate(minimumCvt.a - lastDepth)) / max(sampleCur.a, 0.0001);
-    float depthMask = saturate(1.0 - pow(depthDelta * 4, 4));
+    float depthDelta = saturate(minimumCvt.a - lastDepth) / max(sampleCur.a, 0.0001);
+    float dD4 = saturate(depthDelta * 4.0);
+    float dD4Sq = dD4 * dD4;
+    float depthMask = saturate(1.0 - (dD4Sq * dD4Sq));
 
     float strength = saturate(stabilityRef * UI_TEMPORAL_MULTIPLIER);
-    float baseLeak = 1.0 - lerp(0.50, 0.98, strength);
+    float weight = lerp(0.50, 0.98, strength);
 
-    // Sync baseline to current framerate
-    float adjustedLeak = pow(abs(baseLeak), frametime / (1000.0 / currentFPS));
-
-    float weight = saturate(1.0 - adjustedLeak);
     weight = lerp(weight, weight * (0.6 + localContrast * 2), 0.5);
     weight = clamp(weight * speedFactor * depthMask * zenteonOcclusion, 0.0, 0.95);
 
-    float4 sampleExpClamped = float4(cvtWhatever2Rgb(clamp(cvtRgb2whatever(sampleExp.rgb), minimumCvt.rgb, maximumCvt.rgb)), sampleExp.a);
+    float4 sampleExpClamped = float4(cvtYCbCr2Rgb(clamp(cvtRgb2YCbCr(sampleExp.rgb), minimumCvt.rgb, maximumCvt.rgb)), sampleExp.a);
 
     // Color blending in non-linear power space
     const static float correctionFactor = 2;
-    float3 blendedColor = saturate(pow(lerp(pow(sampleCur.rgb, correctionFactor), pow(sampleExpClamped.rgb, correctionFactor), weight), (1.0 / correctionFactor)));
+    float3 sampleCurSq = sampleCur.rgb * sampleCur.rgb;
+    float3 sampleExpSq = sampleExpClamped.rgb * sampleExpClamped.rgb;
+    float3 blendedColor = sqrt(saturate(lerp(sampleCurSq, sampleExpSq, weight)));
 
     float motionKick = smoothstep(2.0 / 255.0, 4.0 / 255.0, motionMagnitude) * (1.0 / 10.0);
     
     float reconstructionCurve = saturate(motionKick + pow(saturate(motionMagnitude), (1.0 / 3.0)));
     
-    float lumaError = saturate(abs(sampleCur.r - sampleExpClamped.r) * (100.0 / 3.0));
+    float lumaError = saturate(abs(centerCvt.x - minimumCvt.x) * (100.0 / 3.0));
 
     float sharpAmount = sharpenRef * UI_SHARPEN_MULTIPLIER;
     float sharp = reconstructionCurve * lumaError * weight * (1.0 + localContrast) * sharpAmount;
@@ -402,41 +383,21 @@ void SavePost(float4 position : SV_Position, float2 texcoord : TEXCOORD, out flo
 
 float4 Out(float4 position : SV_Position, float2 texcoord : TEXCOORD ) : SV_Target
 {
-    float4 neighbors[9];
-    for(int i = 0; i < 9; i++)
-    {
-        neighbors[i] = tex2Dlod(smpExpColor, texcoord + (nOffsets[i] * ReShade::PixelSize), 0);
-    }
+    if (UI_DEPTH_DEBUG) return float4(getDepth(texcoord).xxx, 1.0);
 
-    float4 topLeft     = neighbors[0];
-    float4 top         = neighbors[1];
-    float4 topRight    = neighbors[2];
-    float4 left        = neighbors[3];
-    float4 center      = neighbors[4];
-    float4 right       = neighbors[5];
-    float4 bottomLeft  = neighbors[6];
-    float4 bottom      = neighbors[7];
-    float4 bottomRight = neighbors[8];
+    float4 center = tex2D(smpExpColor, texcoord);
+    float4 t = tex2D(smpExpColor, texcoord + float2(0, -BUFFER_RCP_HEIGHT));
+    float4 b = tex2D(smpExpColor, texcoord + float2(0,  BUFFER_RCP_HEIGHT));
+    float4 l = tex2D(smpExpColor, texcoord + float2(-BUFFER_RCP_WIDTH,  0));
+    float4 r = tex2D(smpExpColor, texcoord + float2( BUFFER_RCP_WIDTH,  0));
 
-    float4 maxBox = max(max(top, max(bottom, max(left, max(right, center)))), max(topLeft, max(topRight, max(bottomLeft, bottomRight))));
-    float4 minBox = min(min(top, min(bottom, min(left, min(right, center)))), min(topLeft, min(topRight, min(bottomLeft, bottomRight))));
+    float4 minBox = min(center, min(min(t, b), min(l, r)));
+    float4 maxBox = max(center, max(max(t, b), max(l, r)));
 
-    // Apply sharpening using CAS weighting logic
-    float contrast    = 0.0;
-    float sharpAmount = saturate(maxBox.a); 
-
-    float4 crossWeight = -rcp(rsqrt(saturate(min(minBox, 1.0 - maxBox) * rcp(maxBox))) * (-3.0 * contrast + 8.0));
+    float4 crossWeight = -rcp(rsqrt(saturate(min(minBox, 1.0 - maxBox) / maxBox)) * 8.0);
     float4 rcpWeight = rcp(4.0 * crossWeight + 1.0);
     
-    float4 result = lerp(center, saturate(((top + bottom + left + right) * crossWeight + center) * rcpWeight), sharpAmount);
-    
-    if (UI_DEPTH_DEBUG)
-    {
-        float d = getDepth(texcoord);
-        return float4(d.xxx, 1.0);
-    }
-
-    return result;
+    return lerp(center, saturate(((t + b + l + r) * crossWeight + center) * rcpWeight), saturate(maxBox.a));
 }
 
 /*=============================================================================
