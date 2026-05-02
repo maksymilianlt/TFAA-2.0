@@ -27,7 +27,7 @@ static const float2 nOffsets[9] = {
 
 // Mathematically calibrated references
 static const float stabilityRef = 0.275251;
-static const float sharpenRef   = 0.5;
+static const float sharpenRef   = 0.026667;
 
 // Rec.709 Luma coefficients
 static const float3 LumaWeights = float3(0.2126, 0.7152, 0.0722);
@@ -75,13 +75,6 @@ uniform int UI_DEPTH_ORIENTATION <
     ui_items = "Normal\0Reversed\0";
     ui_category = "Depth Buffer Settings";
 > = 0;
-
-uniform float UI_DEPTH_ADJUST <
-    ui_type = "slider";
-    ui_min = 1.0; ui_max = 1000.0; ui_step = 0.125;
-    ui_label = "Depth Map Adjustment";
-    ui_category = "Depth Buffer Settings";
-> = 250.0;
 
 uniform bool UI_DEPTH_UPSIDE_DOWN <
     ui_label = "Upside Down";
@@ -210,9 +203,10 @@ float4 bicubic_5(sampler source, float2 texcoord)
 
     float4 ws[3];
     ws[0].xy = w0; ws[1].xy = w12; ws[2].xy = w3;
-    ws[0].zw = (tc - 1.0) / texsize;
-    ws[1].zw = (tc + 1.0 - w1 / w12) / texsize;
-    ws[2].zw = (tc + 2.0) / texsize;
+    float2 rcpSize = rcp(texsize);
+    ws[0].zw = (tc - 1.0) * rcpSize;
+    ws[1].zw = (tc + 1.0 - w1 * rcp(w12)) * rcpSize;
+    ws[2].zw = (tc + 2.0) * rcpSize;
 
     float4 ret = tex2Dlod(source, float2(ws[1].z, ws[0].w), 0) * ws[1].x * ws[0].y;
     ret += tex2Dlod(source, float2(ws[0].z, ws[1].w), 0) * ws[0].x * ws[1].y;
@@ -220,7 +214,8 @@ float4 bicubic_5(sampler source, float2 texcoord)
     ret += tex2Dlod(source, float2(ws[2].z, ws[1].w), 0) * ws[2].x * ws[1].y;
     ret += tex2Dlod(source, float2(ws[1].z, ws[2].w), 0) * ws[1].x * ws[2].y;
     
-    return max(0, ret * (1.0 / (1.0 - (f.x - f2.x) * (f.y - f2.y) * 0.25)));
+    float weightDenom = 1.0 - (f.x - f2.x) * (f.y - f2.y) * 0.25;
+    return max(0, ret * rcp(weightDenom));
 }
 
 // Linearizes non-linear depth buffer input
@@ -232,7 +227,7 @@ float getDepth(float2 texcoord)
 
     if (UI_DEPTH_ORIENTATION == 1) zBuffer = 1.0 - zBuffer;
 
-    float expDepth = pow(abs(zBuffer), UI_DEPTH_ADJUST);
+    float expDepth = pow(abs(zBuffer), 250.0);
 
     return saturate(expDepth);
 }
@@ -339,10 +334,10 @@ float4 TemporalFilter(float4 position : SV_Position, float2 texcoord : TEXCOORD)
     float diff = saturate(maximumCvt.r - minimumCvt.r);
     float localContrast = diff;
 
-    float motionMagnitude = length(motion) * 160.0; 
-    float speedFactor = 1.0 - sqrt(saturate(motionMagnitude * 0.125));
+    float motionMagnitude = length(motion) * 20.0; 
+    float speedFactor = 1.0 - saturate(motionMagnitude * 1.0);
 
-    float depthDelta = saturate(minimumCvt.a - lastDepth) / max(sampleCur.a, 0.0001);
+    float depthDelta = saturate(minimumCvt.a - lastDepth) * rcp(max(sampleCur.a, 0.0001));
     float dD4 = saturate(depthDelta * 4.0);
     float dD4Sq = dD4 * dD4;
     float depthMask = saturate(1.0 - (dD4Sq * dD4Sq));
@@ -350,7 +345,7 @@ float4 TemporalFilter(float4 position : SV_Position, float2 texcoord : TEXCOORD)
     float strength = saturate(stabilityRef * UI_TEMPORAL_MULTIPLIER);
     float weight = lerp(0.50, 0.98, strength);
 
-    weight = lerp(weight, weight * (0.6 + localContrast * 2), 0.5);
+    weight = weight * (0.8 + localContrast);
     weight = clamp(weight * speedFactor * depthMask * zenteonOcclusion, 0.0, 0.95);
 
     float4 sampleExpClamped = float4(cvtYCbCr2Rgb(clamp(cvtRgb2YCbCr(sampleExp.rgb), minimumCvt.rgb, maximumCvt.rgb)), sampleExp.a);
@@ -361,18 +356,20 @@ float4 TemporalFilter(float4 position : SV_Position, float2 texcoord : TEXCOORD)
     float3 sampleExpSq = sampleExpClamped.rgb * sampleExpClamped.rgb;
     float3 blendedColor = sqrt(saturate(lerp(sampleCurSq, sampleExpSq, weight)));
 
-    float motionKick = smoothstep(2.0 / 255.0, 4.0 / 255.0, motionMagnitude) * (1.0 / 10.0);
-    
-    float reconstructionCurve = saturate(motionKick + pow(saturate(motionMagnitude), (1.0 / 3.0)));
-    
-    float lumaError = saturate(abs(centerCvt.x - minimumCvt.x) * (100.0 / 3.0));
+    float weightBalance = saturate(weight * 1.0526); 
 
+    float motionThreshold = saturate(motionMagnitude * 5.0 - 0.25);
+    float reconstructionCurve = motionThreshold * motionThreshold * (3.0 - 2.0 * motionThreshold);
+
+    float lumaError = saturate(abs(centerCvt.x - minimumCvt.x) * 33.333333);
     float sharpAmount = sharpenRef * UI_SHARPEN_MULTIPLIER;
-    float sharp = reconstructionCurve * lumaError * weight * (1.0 + localContrast) * sharpAmount;
 
-    sharp = saturate(sharp * 3.15 * depthMask);
+    float sharp = reconstructionCurve * weightBalance * lumaError * (localContrast + (1.0 - weight)) * sharpAmount;
+
+    sharp = min(saturate(sharp * 3.333333 * depthMask), 0.333);
 
     return float4(blendedColor, sharp);
+
 }
 
 void SavePost(float4 position : SV_Position, float2 texcoord : TEXCOORD, out float4 lastExpOut : SV_Target0, out float depthOnly : SV_Target1)
@@ -391,13 +388,11 @@ float4 Out(float4 position : SV_Position, float2 texcoord : TEXCOORD ) : SV_Targ
     float4 l = tex2D(smpExpColor, texcoord + float2(-BUFFER_RCP_WIDTH,  0));
     float4 r = tex2D(smpExpColor, texcoord + float2( BUFFER_RCP_WIDTH,  0));
 
-    float4 minBox = min(center, min(min(t, b), min(l, r)));
-    float4 maxBox = max(center, max(max(t, b), max(l, r)));
+    float activeSharp = center.a; 
 
-    float4 crossWeight = -rcp(rsqrt(saturate(min(minBox, 1.0 - maxBox) / maxBox)) * 8.0);
-    float4 rcpWeight = rcp(4.0 * crossWeight + 1.0);
-    
-    return lerp(center, saturate(((t + b + l + r) * crossWeight + center) * rcpWeight), saturate(maxBox.a));
+    float4 edgeDetail = (center * 4.0) - (t + b + l + r);
+
+    return float4(saturate(center.rgb + (edgeDetail.rgb * activeSharp)), 1.0);
 }
 
 /*=============================================================================
