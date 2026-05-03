@@ -36,32 +36,48 @@ static const float3 LumaWeights = float3(0.2126, 0.7152, 0.0722);
     UI
 =============================================================================*/
 
-uniform int UI_MOTION_SOURCE <
-    ui_type = "combo";
-    ui_label = "Motion Vector Source";
-    ui_items = "iMMERSE: Launchpad\0vort_MotionEffects\0LUMENITE: Kernel\0Zenteon: Motion\0";
-    ui_category = "Temporal Filter";
-    ui_tooltip = "Select the provider for motion vectors.";
-> = 0;
+#ifndef TFAA_MOTION_SOURCE
+    #define TFAA_MOTION_SOURCE 0
+#endif
+
+uniform int TFAA_Motion_Guide <
+    ui_type = "radio";
+    ui_category = "Help";
+    ui_label = " ";
+    ui_text = 
+        "\n"
+        " ============================================================\n"
+        " TFAA_MOTION_SOURCE:\n"
+        "\n"
+        " Selects the motion vector provider for temporal reconstruction.\n"
+        " Provider assigned to each number:\n"
+        "\n"
+        " 0: iMMERSE: Launchpad\n"
+        " 1: vort_MotionEffects\n"
+        " 2: LUMENITE: Kernel\n"
+        " 3: Zenteon: Framework\n"
+        " 4: Zenteon: Motion / BaBa: Flow / BaBa: Flow Lite\n"
+        " ============================================================\n";
+>;
 
 uniform float UI_TEMPORAL_MULTIPLIER <
-    ui_type    = "slider";
-    ui_min      = 0.0; 
-    ui_max      = 2.0;
-    ui_step    = 0.01;
-    ui_label   = "Temporal Accumulation Multiplier";
-    ui_category= "Temporal Filter";
-    ui_tooltip = "Scales the temporal accumulation strength.";
-> = 1.0;
-
-uniform float UI_SHARPEN_MULTIPLIER <
     ui_type     = "slider";
     ui_min      = 0.0; 
     ui_max      = 2.0;
     ui_step     = 0.01;
-    ui_label    = "Adaptive Sharpening Multiplier";
+    ui_label    = "Temporal Accumulation Multiplier";
     ui_category = "Temporal Filter";
-    ui_tooltip  = "Scales the adaptive sharpening strength.";
+    ui_tooltip  = "Scales the temporal accumulation strength.";
+> = 1.0;
+
+uniform float UI_SHARPEN_MULTIPLIER <
+    ui_type      = "slider";
+    ui_min       = 0.0; 
+    ui_max       = 2.0;
+    ui_step      = 0.01;
+    ui_label     = "Adaptive Sharpening Multiplier";
+    ui_category  = "Temporal Filter";
+    ui_tooltip   = "Scales the adaptive sharpening strength.";
 > = 1.0;
 
 uniform bool UI_DEPTH_DEBUG <
@@ -233,59 +249,43 @@ float getDepth(float2 texcoord)
 }
 
 /*=============================================================================
-    Motion Bridge
+    Optimized Motion Bridge
 =============================================================================*/
 
-// Resource declarations for external motion vector providers
-texture2D texMotionVectors { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RGBA16F; };
-texture2D tDOC              { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = R8;    };
-sampler2D sZenteonMV  { Texture = texMotionVectors; };
-sampler2D sZenteonDOC { Texture = tDOC; };
-
-texture2D tLumaFlow { Width = BUFFER_WIDTH/8; Height = BUFFER_HEIGHT/8; Format = RG16F; };
-sampler2D sLumaFlow { 
-    Texture = tLumaFlow; 
-    MagFilter = POINT; MinFilter = POINT; 
-    AddressU = CLAMP; AddressV = CLAMP; 
-};
-
-texture2D MotVectTexVort { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
-sampler2D sMotVectTexVort { 
-    Texture = MotVectTexVort; 
-    MagFilter = POINT; MinFilter = POINT; MipFilter = POINT; 
-    AddressU = CLAMP; AddressV = CLAMP; 
-};
-
-namespace Deferred 
-{
-    texture MotionVectorsTex { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
-    sampler sMotionVectorsTex { Texture = MotionVectorsTex; };
-
-    float2 get_motion(float2 uv)
-    {
-        return tex2Dlod(sMotionVectorsTex, uv, 0).xy;
+#if TFAA_MOTION_SOURCE == 0
+    namespace Deferred {
+        texture MotionVectorsTex { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
+        sampler sMotionVectorsTex { Texture = MotionVectorsTex; };
     }
-}
+#elif TFAA_MOTION_SOURCE == 1
+    texture2D MotVectTexVort { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
+    sampler2D sMotVectTexVort { Texture = MotVectTexVort; MagFilter = POINT; MinFilter = POINT; AddressU = CLAMP; AddressV = CLAMP; };
+#elif TFAA_MOTION_SOURCE == 2
+    texture2D tLumaFlow { Width = BUFFER_WIDTH/8; Height = BUFFER_HEIGHT/8; Format = RG16F; };
+    sampler2D sLumaFlow { Texture = tLumaFlow; MagFilter = POINT; MinFilter = POINT; AddressU = CLAMP; AddressV = CLAMP; };
+#elif TFAA_MOTION_SOURCE == 3
+    namespace zfw { 
+        texture2D tVelocity { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RGBA16F; }; 
+        sampler2D sVelocity { Texture = tVelocity; };
+    }
+#else
+    texture2D texMotionVectors { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RGBA16F; };
+    sampler2D sSharedMV { Texture = texMotionVectors; };
+#endif
 
-// Routes motion vector data from selected source to the temporal resolver
 float2 get_universal_motion(float2 uv)
 {
-    if (UI_MOTION_SOURCE == 0)
-    {
-        return Deferred::get_motion(uv);
-    }
-    else if (UI_MOTION_SOURCE == 1)
-    {
-        return tex2Dlod(sMotVectTexVort, uv, 0).rg;
-    }
-    else if (UI_MOTION_SOURCE == 2)
-    {
-        return tex2Dlod(sLumaFlow, uv, 0).xy;
-    }
-    else
-    {
-        return tex2Dlod(sZenteonMV, uv, 0).xy;
-    }
+    #if TFAA_MOTION_SOURCE == 0
+        return tex2Dlod(Deferred::sMotionVectorsTex, float4(uv, 0, 0)).xy;
+    #elif TFAA_MOTION_SOURCE == 1
+        return tex2Dlod(sMotVectTexVort, float4(uv, 0, 0)).xy;
+    #elif TFAA_MOTION_SOURCE == 2
+        return tex2Dlod(sLumaFlow, float4(uv, 0, 0)).xy;
+    #elif TFAA_MOTION_SOURCE == 3
+        return tex2Dlod(zfw::sVelocity, float4(uv, 0, 0)).xy;
+    #else
+        return tex2Dlod(sSharedMV, float4(uv, 0, 0)).xy;
+    #endif
 }
 
 /*=============================================================================
@@ -324,11 +324,6 @@ float4 TemporalFilter(float4 position : SV_Position, float2 texcoord : TEXCOORD)
 
     float2 motion = get_universal_motion(texcoord + nOffsets[closestDepthIndex]);
     float2 lastSamplePos = texcoord + motion;
-    
-    float zenteonOcclusion = 1.0;
-    if (UI_MOTION_SOURCE == 3) {
-        zenteonOcclusion = tex2Dlod(sZenteonDOC, texcoord, 0).x;
-    }
 
     float lastDepth = tex2Dlod(smpDepthBackup, lastSamplePos, 0).r;
     float4 sampleExp = saturate(bicubic_5(smpExpColorBackup, lastSamplePos));
@@ -348,7 +343,7 @@ float4 TemporalFilter(float4 position : SV_Position, float2 texcoord : TEXCOORD)
     float weight = lerp(0.50, 0.98, strength);
 
     weight = weight * (0.8 + localContrast);
-    weight = clamp(weight * speedFactor * depthMask * zenteonOcclusion, 0.0, 0.95);
+    weight = clamp(weight * speedFactor * depthMask, 0.0, 0.95);
 
     float4 sampleExpClamped = float4(cvtYCbCr2Rgb(clamp(cvtRgb2YCbCr(sampleExp.rgb), minimumCvt.rgb, maximumCvt.rgb)), sampleExp.a);
 
