@@ -14,13 +14,13 @@ A modified version of Temporal Filter Anti-Aliasing (TFAA) for ReShade, optimize
 - **Real-Time FPS Synchronization:** Dynamic frametime scaling ensures blending weights synchronize 1:1 with your current refresh rate.
 - **Rec.709 Integration:** Migrated from Rec.601 luma conversion to Rec.709 luma conversion to align with modern color-space standards.
 - **Stability Fixes:** Resolved history buffer resource pooling conflicts and implemented division-by-zero crash guards.
-- **Universal Motion Bridge:** Added native support for iMMERSE: Launchpad, vort_MotionEffects, LUMENITE: Kernel, and Zenteon: Motion.
+- **Universal Motion Bridge:** Added native support for iMMERSE: Launchpad, vort_MotionEffects, LUMENITE: Kernel, Zenteon: Framework, Zenteon: Motion, BaBa: Flow, and BaBa: Flow Lite.
 
 ## Installation and Requirements
  - Install the latest version of ReShade.
  - Place `TFAA_2.0.fx` in your `reshade-shaders/Shaders` directory.
- - Requires a supported motion vector provider: **iMMERSE Launchpad**, **vort_MotionEffects**, **LUMENITE: Kernel**, or **Zenteon: Motion**.
- - Enable `Display Depth Debug` in the shader UI. Use the **Depth Orientation**, **Upside Down**, and **Depth Map Adjustment** settings until you see a clear grayscale representation of your game world.
+ - **Motion Selection:** Set **`TFAA_MOTION_SOURCE`** in **Preprocessor Definitions** to match your provider. Check the **Help** section in the shader UI for the ID list.
+ - **Depth Setup:** Enable `Display Depth Debug` in the shader UI. Use the **Depth Orientation**, **Upside Down**, and **Depth Map Adjustment** settings until you see a clear grayscale representation of your game world.
 
 ## Load Order
 1. Spatial Anti-Aliasing
