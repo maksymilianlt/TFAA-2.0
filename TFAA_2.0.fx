@@ -27,7 +27,7 @@ static const float2 nOffsets[9] = {
 
 // Mathematically calibrated references
 static const float stabilityRef = 0.275251;
-static const float sharpenRef   = 0.026667;
+static const float sharpenRef   = 0.082575;
 
 // Rec.709 Luma coefficients
 static const float3 LumaWeights = float3(0.2126, 0.7152, 0.0722);
@@ -299,6 +299,8 @@ float4 SaveCur(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_T
 
 float4 TemporalFilter(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
 {
+    const float screenScale = BUFFER_HEIGHT / 1080.0;
+
     float4 sampleCur = tex2Dlod(smpInCurBackup, texcoord, 0);
     float3 centerCvt = cvtRgb2YCbCr(sampleCur.rgb);
 
@@ -334,7 +336,7 @@ float4 TemporalFilter(float4 position : SV_Position, float2 texcoord : TEXCOORD)
     float diff = saturate(maximumCvt.r - minimumCvt.r);
     float localContrast = diff;
 
-    float motionMagnitude = length(motion) * 20.0; 
+    float motionMagnitude = (length(motion) * 20.0) / screenScale; 
     float speedFactor = 1.0 - saturate(motionMagnitude * 1.0);
 
     float depthDelta = saturate(minimumCvt.a - lastDepth) * rcp(max(sampleCur.a, 0.0001));
@@ -361,12 +363,12 @@ float4 TemporalFilter(float4 position : SV_Position, float2 texcoord : TEXCOORD)
     float motionThreshold = saturate(motionMagnitude * 5.0 - 0.25);
     float reconstructionCurve = motionThreshold * motionThreshold * (3.0 - 2.0 * motionThreshold);
 
-    float lumaError = saturate(abs(centerCvt.x - minimumCvt.x) * 33.333333);
+    float lumaError = saturate(abs(centerCvt.x - minimumCvt.x) * (33.333333 * screenScale));
     float sharpAmount = sharpenRef * UI_SHARPEN_MULTIPLIER;
 
     float sharp = reconstructionCurve * weightBalance * lumaError * (localContrast + (1.0 - weight)) * sharpAmount;
 
-    sharp = min(saturate(sharp * 3.333333 * depthMask), 0.333);
+    sharp = min(saturate(sharp * 3.333333 * depthMask), 0.333 * screenScale);
 
     return float4(blendedColor, sharp);
 
@@ -382,17 +384,20 @@ float4 Out(float4 position : SV_Position, float2 texcoord : TEXCOORD ) : SV_Targ
 {
     if (UI_DEPTH_DEBUG) return float4(getDepth(texcoord).xxx, 1.0);
 
+    const float2 offset = float2(BUFFER_RCP_WIDTH, BUFFER_RCP_HEIGHT);
+
     float4 center = tex2D(smpExpColor, texcoord);
-    float4 t = tex2D(smpExpColor, texcoord + float2(0, -BUFFER_RCP_HEIGHT));
-    float4 b = tex2D(smpExpColor, texcoord + float2(0,  BUFFER_RCP_HEIGHT));
-    float4 l = tex2D(smpExpColor, texcoord + float2(-BUFFER_RCP_WIDTH,  0));
-    float4 r = tex2D(smpExpColor, texcoord + float2( BUFFER_RCP_WIDTH,  0));
+
+    float3 t = tex2D(smpExpColor, texcoord + float2(0, -offset.y)).rgb;
+    float3 b = tex2D(smpExpColor, texcoord + float2(0,  offset.y)).rgb;
+    float3 l = tex2D(smpExpColor, texcoord + float2(-offset.x, 0)).rgb;
+    float3 r = tex2D(smpExpColor, texcoord + float2( offset.x, 0)).rgb;
 
     float activeSharp = center.a; 
 
-    float4 edgeDetail = (center * 4.0) - (t + b + l + r);
+    float3 edgeDetail = (center.rgb * 4.0) - (t + b + l + r);
 
-    return float4(saturate(center.rgb + (edgeDetail.rgb * activeSharp)), 1.0);
+    return float4(saturate(center.rgb + (edgeDetail * activeSharp)), 1.0);
 }
 
 /*=============================================================================
